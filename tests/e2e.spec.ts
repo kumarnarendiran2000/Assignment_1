@@ -15,21 +15,27 @@ test.describe('E2E Testing for My Application', () => {
     // Verify that the user is redirected to the home page
     await expect(page).toHaveURL('http://localhost:5173/');
     await expect(page.locator('h2')).toHaveText('Welcome to my website');
+    await expect(page.locator('p')).toHaveText('This is the home page content');
+    
 
     // Navigate to the About page
     await page.click('text=About');
     await expect(page).toHaveURL('http://localhost:5173/about');
     await expect(page.locator('h2')).toHaveText('Welcome to my website');
+    await expect(page.locator('p')).toHaveText('This is the About page content');
+    
 
     // Navigate to the Services page
     await page.click('text=Services');
     await expect(page).toHaveURL('http://localhost:5173/services');
     await expect(page.locator('h2')).toHaveText('Welcome to my website');
+    await expect(page.locator('p')).toHaveText('This is the Services page content');
 
     // Navigate to the Contact page
     await page.click('text=Contact');
     await expect(page).toHaveURL('http://localhost:5173/contact');
     await expect(page.locator('h2')).toHaveText('Contact Us');
+    await expect(page.locator('p')).toHaveText('Feel free to reach out to us!');
 
     // Navigate to the Contact Form page
     await page.click('text=Fill out the contact form');

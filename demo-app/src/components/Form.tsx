@@ -1,23 +1,24 @@
-import React from "react";
-import useStore from "../store/useStore";
+// src/components/Form.tsx
+import React from 'react';
+import useStore from '../store/useStore';
 
 const Form: React.FC = () => {
   const { name, email, message, setName, setEmail, setMessage, resetForm } = useStore();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const response = await fetch("http://localhost:3001/contacts", {
-      method: "POST",
+    const response = await fetch('http://localhost:3001/contacts', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({ name, email, message }),
     });
     if (response.ok) {
-      alert("Data submitted successfully");
+      alert('Data submitted successfully');
       resetForm();
     } else {
-      alert("Error submitting data");
+      alert('Error submitting data');
     }
   };
 
@@ -25,8 +26,9 @@ const Form: React.FC = () => {
     <form onSubmit={handleSubmit} className="bg-white p-6 rounded shadow-md">
       <h2 className="text-2xl mb-4">Contact Form</h2>
       <div className="mb-4">
-        <label className="block mb-1">Name</label>
+        <label htmlFor="name" className="block mb-1">Name</label>
         <input
+          id="name"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -34,8 +36,9 @@ const Form: React.FC = () => {
         />
       </div>
       <div className="mb-4">
-        <label className="block mb-1">Email</label>
+        <label htmlFor="email" className="block mb-1">Email</label>
         <input
+          id="email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -43,8 +46,9 @@ const Form: React.FC = () => {
         />
       </div>
       <div className="mb-4">
-        <label className="block mb-1">Message</label>
+        <label htmlFor="message" className="block mb-1">Message</label>
         <textarea
+          id="message"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           className="w-full p-2 border rounded"
