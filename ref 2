@@ -1,0 +1,229 @@
+import axios from "axios";
+import { generateClientAssertion } from "../utils/generateClientAssertion";
+import { Secrets } from "../types/secrets";
+const API_URLS = require("../apiconfig.json");
+
+/**
+ * 1. Generate Client Credentials Token
+ */
+export const getClientCredentialsToken = async (secrets: Secrets, scope: string) => {
+  const clientAssertion = await generateClientAssertion(secrets);
+  const response = await axios.post(
+    `${API_URLS.identityUrl}/oidc/token`,
+    new URLSearchParams({
+      grant_type: "client_credentials",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+      scope,
+    }),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    }
+  );
+  return response.data.access_token;
+};
+
+/**
+ * 2. Create User
+ */
+export const createUser = async (accessToken: string) => {
+  const response = await axios.post(
+    `${API_URLS.identityUrl}/users`,
+    {},
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+  return response.data.id;
+};
+
+/**
+ * 3. Generate Authorization URI
+ */
+export const generateAuthorizationURI = async (accessToken: string, userId: string, secrets: Secrets) => {
+  const clientAssertion = await generateClientAssertion(secrets);
+  const response = await axios.post(
+    `${API_URLS.identityUrl}/oidc/request`,
+    {
+      client_id: secrets.client_id,
+      redirect_uri: "https://your-redirect-uri.com/callback",
+      response_type: "code id_token",
+      scope: "openid id:test",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+      state: "12345abcd",
+      nonce: "nonce123",
+      claims: {
+        id_token: {
+          sub: { essential: true, value: userId },
+        },
+      },
+      prompt: "consent",
+    },
+    {
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    }
+  );
+  return response.data.redirect_uri;
+};
+
+/**
+ * 4. Exchange Authorization Code for Tokens
+ */
+export const exchangeAuthCodeForTokens = async (
+  secrets: Secrets,
+  authCode: string,
+  redirectUri: string
+) => {
+  const clientAssertion = await generateClientAssertion(secrets);
+  const response = await axios.post(
+    `${API_URLS.identityUrl}/oidc/token`,
+    new URLSearchParams({
+      grant_type: "authorization_code",
+      code: authCode,
+      redirect_uri: redirectUri,
+      client_id: secrets.client_id,
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    }),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    }
+  );
+  return response.data;
+};
+
+/**
+ * 5. Generate Scoped Access Token for /accounts API
+ */
+export const getScopedAccessToken = async (secrets: Secrets, userId: string) => {
+  const clientAssertion = await generateClientAssertion(secrets);
+  const response = await axios.post(
+    `${API_URLS.identityUrl}/oidc/token`,
+    new URLSearchParams({
+      grant_type: "client_credentials",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+      scope: "accounts:read",
+      sub: userId,
+    }),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    }
+  );
+  return response.data.access_token;
+};
+
+
+const database: Record<string, { ckNumber: string; moneyhubUserId: string }> = {};
+
+/**
+ * Fetches user by CK number from the database
+ * @param ckNumber - User's CK number
+ */
+export const getUserFromDatabase = async (ckNumber: string) => {
+  return database[ckNumber] || null;
+};
+
+/**
+ * Saves user to the database
+ * @param user - Object containing CK number and Moneyhub User ID
+ */
+export const saveUserToDatabase = async (user: { ckNumber: string; moneyhubUserId: string }) => {
+  database[user.ckNumber] = user;
+};
+
+
+import { Context } from "hono";
+import {
+  getClientCredentialsToken,
+  createUser,
+  generateAuthorizationURI,
+  exchangeAuthCodeForTokens,
+} from "../services/moneyhubServices";
+import { getUserFromDatabase, saveUserToDatabase } from "../services/databaseService";
+import { getSecrets } from "../utils/secrets";
+
+export const getAuthorizationURI = async (c: Context) => {
+  try {
+    const secrets = await getSecrets();
+    const { ckNumber } = await c.req.json();
+
+    const existingUser = await getUserFromDatabase(ckNumber);
+
+    let userId: string;
+    const clientCredentialsToken = await getClientCredentialsToken(secrets);
+
+    if (existingUser) {
+      userId = existingUser.moneyhubUserId; // Use existing user ID
+    } else {
+      // Create new user in Moneyhub
+      userId = await createUser(clientCredentialsToken);
+      // Save user to database
+      await saveUserToDatabase({
+        ckNumber,
+        moneyhubUserId: userId,
+      });
+    }
+
+    const redirectUri = await generateAuthorizationURI(clientCredentialsToken, userId);
+    return c.json({ redirectUri });
+  } catch (error) {
+    console.error("Error in generating Authorization URI:", error.message);
+    return c.json({ error: "Failed to generate authorization URI" }, 500);
+  }
+};
+
+export const generateTokensWithAuthCode = async (c: Context) => {
+  try {
+    const body = await c.req.json();
+    const { authCode, redirectUri } = body;
+
+    const secrets = await getSecrets();
+    const tokens = await exchangeAuthCodeForTokens(secrets, authCode, redirectUri);
+
+    return c.json(tokens);
+  } catch (error) {
+    console.error("Error in generating tokens:", error.message);
+    return c.json({ error: "Failed to generate tokens" }, 500);
+  }
+};
+
+
+import { Hono } from "hono";
+import {
+  getAuthorizationURI,
+  generateTokensWithAuthCode,
+} from "../controllers/moneyhubController";
+
+const app = new Hono();
+
+app.post("/auth-url", getAuthorizationURI);
+app.post("/auth-code", generateTokensWithAuthCode);
+
+export default app;
+
+
+
+import * as jose from "jose";
+import { Secrets } from "../types/secrets";
+
+/**
+ * Generates a client assertion JWT signed with the private key
+ * @param secrets - Secrets containing private key and client ID
+ * @returns Signed client assertion JWT
+ */
+export const generateClientAssertion = async (secrets: Secrets) => {
+  const privateKey = await jose.importJWK(JSON.parse(secrets.key), "RS256");
+  const jwt = await new jose.SignJWT({})
+    .setProtectedHeader({ alg: "RS256" })
+    .setIssuer(secrets.client_id)
+    .setSubject(secrets.client_id)
+    .setAudience(`${process.env.IDENTITY_URL}/oidc/token`)
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .setJti("unique-jti")
+    .sign(privateKey);
+
+  return jwt;
+};
