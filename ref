@@ -1,0 +1,187 @@
+import { app } from "../app"; // Import initialized Hono app
+import { getAuthURIController, exchangeCodeController } from "../controllers/moneyhub.controller";
+
+// Define Moneyhub-related routes
+app.post("/moneyhub/auth-uri", getAuthURIController); // Generate authorization URI
+app.post("/moneyhub/exchange-code", exchangeCodeController); // Exchange auth code and generate scoped token
+
+_--------
+
+import {
+  getClientToken,
+  createUser,
+  generateAuthURI,
+  exchangeAuthCode,
+  getScopedToken,
+} from "../services";
+import { findUserByCkNumber, createUserInDatabase, updateTokenInDatabase } from "../services/database.service";
+
+const database = new Map(); // Temporary in-memory database for CK number and Moneyhub user data
+
+// Generate Authorization URI
+export const getAuthURIController = async (c) => {
+  const { ck_number } = await c.req.json();
+
+  // Check if user exists
+  const user = database.get(ck_number);
+  let moneyhubUserId;
+
+  if (!user) {
+    // Generate client token
+    const clientToken = await getClientToken();
+    // Create Moneyhub user
+    const moneyhubUser = await createUser(clientToken);
+    moneyhubUserId = moneyhubUser.id;
+
+    // Save new user in the database
+    await createUserInDatabase(ck_number, moneyhubUserId);
+  } else {
+    // Use existing user ID
+    moneyhubUserId = user.moneyhub_user_id;
+  }
+
+  // Generate Authorization URI
+  const authURI = await generateAuthURI(moneyhubUserId);
+
+  // Return the URI
+  return c.json({ authURI });
+};
+
+// Exchange Authorization Code and Generate Scoped Token
+export const exchangeCodeController = async (c) => {
+  const { ck_number, auth_code } = await c.req.json();
+
+  // Retrieve Moneyhub user ID from the database
+  const user = database.get(ck_number);
+  if (!user) {
+    return c.json({ error: "User not found" }, 404);
+  }
+
+  const moneyhubUserId = user.moneyhub_user_id;
+
+  // Exchange auth code for temporary token
+  const tempToken = await exchangeAuthCode(auth_code);
+
+  // Generate scoped token
+  const scopedTokenResponse = await getScopedToken(moneyhubUserId);
+
+  // Save the scoped token and expiry in the database
+  await updateTokenInDatabase(ck_number, scopedTokenResponse.access_token, scopedTokenResponse.expires_at);
+
+  // Return the scoped token
+  return c.json({
+    scoped_token: scopedTokenResponse.access_token,
+    expires_at: scopedTokenResponse.expires_at,
+  });
+};
+
+-------
+
+import axios from "axios";
+import { generateClientAssertion } from "./utils";
+
+export const getClientToken = async (): Promise<string> => {
+  const response = await axios.post("https://identity.moneyhub.co.uk/oidc/token", {
+    scope: "user:create user:read",
+    grant_type: "client_credentials",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: await generateClientAssertion(),
+  });
+  return response.data.access_token;
+};
+
+
+
+import axios from "axios";
+
+export const createUser = async (clientToken: string): Promise<any> => {
+  const response = await axios.post(
+    "https://identity.moneyhub.co.uk/users",
+    {},
+    {
+      headers: {
+        Authorization: `Bearer ${clientToken}`,
+      },
+    }
+  );
+  return response.data;
+};
+
+
+import axios from "axios";
+import { generateClientAssertion } from "./utils";
+
+export const generateAuthURI = async (moneyhubUserId: string): Promise<string> => {
+  const response = await axios.post("https://identity.moneyhub.co.uk/oidc/request", {
+    client_id: "20585464-984f-4167-8852-81e6ded35bc5",
+    redirect_uri: "https://your-redirect-uri.com",
+    response_type: "code id_token",
+    scope: "openid id:test",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: await generateClientAssertion(),
+    state: "random_state_value",
+    nonce: "random_nonce_value",
+    claims: {
+      id_token: {
+        sub: {
+          essential: true,
+          value: moneyhubUserId,
+        },
+      },
+    },
+    prompt: "consent",
+  });
+  return response.data.uri;
+};
+
+
+import axios from "axios";
+import { generateClientAssertion } from "./utils";
+
+export const exchangeAuthCode = async (authCode: string): Promise<any> => {
+  const response = await axios.post("https://identity.moneyhub.co.uk/oidc/token", {
+    grant_type: "authorization_code",
+    code: authCode,
+    redirect_uri: "https://your-redirect-uri.com",
+    client_id: "20585464-984f-4167-8852-81e6ded35bc5",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: await generateClientAssertion(),
+  });
+  return response.data;
+};
+
+
+import axios from "axios";
+import { generateClientAssertion } from "./utils";
+
+export const getScopedToken = async (moneyhubUserId: string): Promise<any> => {
+  const response = await axios.post("https://identity.moneyhub.co.uk/oidc/token", {
+    scope: "accounts:read beneficiaries:read",
+    grant_type: "client_credentials",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: await generateClientAssertion(),
+    sub: moneyhubUserId,
+  });
+  return response.data;
+};
+
+
+import { SignJWT } from "jose";
+
+export const generateClientAssertion = async (): Promise<string> => {
+  const privateKey = `-----BEGIN PRIVATE KEY-----
+  YOUR_PRIVATE_KEY_HERE
+  -----END PRIVATE KEY-----`;
+
+  const payload = {
+    iss: "20585464-984f-4167-8852-81e6ded35bc5", // Client ID
+    sub: "20585464-984f-4167-8852-81e6ded35bc5", // Client ID
+    aud: "https://identity.moneyhub.co.uk/oidc/token",
+    jti: Math.random().toString(36).substring(2),
+    exp: Math.floor(Date.now() / 1000) + 300,
+  };
+
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg: "RS256" })
+    .sign(await (await import("jose")).importPKCS8(privateKey, "RS256"));
+};
