@@ -1,4 +1,32 @@
 import { factory } from 'hono-factory';
+import axios from 'axios';
+import { getSecrets } from '../secrets';
+import { CONFIG } from '../config';
+
+export const moneyhubMiddleware = factory.createMiddleware(async (c, next) => {
+  const secrets = await getSecrets();
+
+  if (!secrets?.moneyhub) {
+    throw new Error('Moneyhub secrets are missing');
+  }
+
+  const moneyhubAxios = axios.create({
+    baseURL: secrets.moneyhub.identityUrl,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  // Expose the Moneyhub Axios instance to the request context
+  c.var.moneyhubAxios = moneyhubAxios;
+
+  await next();
+});
+
+---
+
+
+import { factory } from 'hono-factory';
 import { getAuthorizationURI, handleCallback } from '../controllers/moneyhubController';
 
 export function moneyhubRoutes() {
