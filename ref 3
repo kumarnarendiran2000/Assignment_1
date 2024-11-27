@@ -1,0 +1,191 @@
+import { factory } from 'hono-factory';
+import { getAuthorizationURI, handleCallback } from '../controllers/moneyhubController';
+
+export function moneyhubRoutes() {
+  const route = factory.createApp();
+
+  // Route to generate the Authorization URI
+  route.get('/authorization-uri', getAuthorizationURI);
+
+  // Route to handle callback with Authorization Code
+  route.post('/callback', handleCallback);
+
+  return route;
+}
+
+
+
+
+----
+
+import { Context } from 'hono';
+import {
+  createUserAndGenerateAuthURI,
+  generateAuthorizationURI,
+  exchangeAuthCodeForAccessToken,
+  generateScopedAccessToken,
+} from '../services/moneyhubService';
+import { findUserIdByCkNumber, createUserInDatabase } from '../models/userModel';
+import { findTokenByUserId, storeAccessToken } from '../models/tokenModel';
+
+export async function getAuthorizationURI(c: Context) {
+  const ckNumber = c.req.query('ck');
+  if (!ckNumber) {
+    return c.json({ error: 'Missing ckNumber' }, 400);
+  }
+
+  // Check if user exists
+  let userId = await findUserIdByCkNumber(ckNumber);
+
+  if (!userId) {
+    // User does not exist, create user and generate redirect URI
+    const { authURI, moneyhubUserId } = await createUserAndGenerateAuthURI(ckNumber);
+    await createUserInDatabase(ckNumber, moneyhubUserId);
+    return c.json({ authURI });
+  }
+
+  // User exists, generate redirect URI directly
+  const authURI = await generateAuthorizationURI(userId);
+  return c.json({ authURI });
+}
+
+export async function handleCallback(c: Context) {
+  const { authorizationCode } = await c.req.json();
+  if (!authorizationCode) {
+    return c.json({ error: 'Missing authorization code' }, 400);
+  }
+
+  // Exchange authorization code for access token
+  const { accessToken, idToken, expiresIn } = await exchangeAuthCodeForAccessToken(authorizationCode);
+
+  // Decode ID Token to get the userId
+  const userId = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64').toString()).sub;
+
+  // Generate a scoped access token
+  const scopedAccessToken = await generateScopedAccessToken(userId);
+
+  // Store the access token and expiry in the database
+  await storeAccessToken(userId, scopedAccessToken, expiresIn);
+
+  return c.json({ success: true });
+}
+
+----
+
+import axios from 'axios';
+import { generateClientAssertion } from '../utils/clientAssertion';
+import { getSecrets } from '../secrets';
+
+const secrets = await getSecrets();
+
+export async function createUserAndGenerateAuthURI(ckNumber: string) {
+  // Generate client assertion
+  const clientAssertion = generateClientAssertion();
+
+  // Step 1: Generate Client Credentials Token
+  const { data: tokenResponse } = await axios.post(`${secrets.moneyhub.identityUrl}/oidc/token`, {
+    grant_type: 'client_credentials',
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: clientAssertion,
+    scope: 'user:create user:read',
+  });
+  const accessToken = tokenResponse.access_token;
+
+  // Step 2: Create User
+  const { data: userResponse } = await axios.post(
+    `${secrets.moneyhub.identityUrl}/users`,
+    {},
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const moneyhubUserId = userResponse.userId;
+
+  // Step 3: Generate Authorization URI
+  const { data: uriResponse } = await axios.post(
+    `${secrets.moneyhub.identityUrl}/oidc/request`,
+    {
+      client_id: secrets.moneyhub.clientId,
+      redirect_uri: secrets.moneyhub.redirectUri,
+      response_type: 'code id_token',
+      scope: 'openid id:test',
+      state: '12345abcd1234',
+      nonce: '12345abcd1234',
+      claims: { id_token: { sub: { essential: true, value: moneyhubUserId } } },
+      prompt: 'consent',
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: clientAssertion,
+    }
+  );
+  const authURI = uriResponse.uri;
+
+  return { authURI, moneyhubUserId };
+}
+
+export async function generateAuthorizationURI(userId: string) {
+  const clientAssertion = generateClientAssertion();
+  const { data: uriResponse } = await axios.post(
+    `${secrets.moneyhub.identityUrl}/oidc/request`,
+    {
+      client_id: secrets.moneyhub.clientId,
+      redirect_uri: secrets.moneyhub.redirectUri,
+      response_type: 'code id_token',
+      scope: 'openid id:test',
+      state: '12345abcd1234',
+      nonce: '12345abcd1234',
+      claims: { id_token: { sub: { essential: true, value: userId } } },
+      prompt: 'consent',
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: clientAssertion,
+    }
+  );
+  return uriResponse.uri;
+}
+
+export async function exchangeAuthCodeForAccessToken(authorizationCode: string) {
+  const clientAssertion = generateClientAssertion();
+  const { data: tokenResponse } = await axios.post(`${secrets.moneyhub.identityUrl}/oidc/token`, {
+    grant_type: 'authorization_code',
+    code: authorizationCode,
+    redirect_uri: secrets.moneyhub.redirectUri,
+    client_id: secrets.moneyhub.clientId,
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: clientAssertion,
+  });
+  return {
+    accessToken: tokenResponse.access_token,
+    idToken: tokenResponse.id_token,
+    expiresIn: tokenResponse.expires_in,
+  };
+}
+
+export async function generateScopedAccessToken(userId: string) {
+  const clientAssertion = generateClientAssertion();
+  const { data: tokenResponse } = await axios.post(`${secrets.moneyhub.identityUrl}/oidc/token`, {
+    grant_type: 'client_credentials',
+    scope: 'accounts:read beneficiaries:read',
+    client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+    client_assertion: clientAssertion,
+    sub: userId,
+  });
+  return tokenResponse.access_token;
+}
+
+------
+
+import { SignJWT } from 'jose';
+import { getSecrets } from '../secrets';
+
+export function generateClientAssertion() {
+  const secrets = getSecrets();
+  const payload = {
+    iss: secrets.moneyhub.clientId,
+    sub: secrets.moneyhub.clientId,
+    aud: `${secrets.moneyhub.identityUrl}/oidc/token`,
+    jti: Math.random().toString(36).substring(2),
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 300,
+  };
+
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg: 'RS256', kid: secrets.moneyhub.key.kid })
+    .sign(secrets.moneyhub.key.privateKey);
+}
