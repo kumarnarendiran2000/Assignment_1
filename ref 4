@@ -1,0 +1,81 @@
+export async function generateClientCredentialsToken(moneyhubAxios: AxiosInstance): Promise<string> {
+  const { data } = await moneyhubAxios.post("/oidc/token", {
+    scope: "user:create user:read",
+    grant_type: "client_credentials",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: generateClientAssertion(SECRETS.moneyhub.private_key, SECRETS.moneyhub.client_id),
+  });
+  return data.access_token; // Return client credentials token
+}
+
+---
+
+export async function createUser(clientToken: string, moneyhubAxios: AxiosInstance): Promise<{ userId: string }> {
+  const { data } = await moneyhubAxios.post(
+    "/users",
+    {}, // Empty body
+    {
+      headers: {
+        Authorization: `Bearer ${clientToken}`,
+      },
+    }
+  );
+  return { userId: data.userId }; // Return the newly created user ID
+}
+
+
+---
+
+export async function generateAuthorizationUrl(userId: string, moneyhubAxios: AxiosInstance): Promise<string> {
+  const { data } = await moneyhubAxios.post("/oidc/request", {
+    client_id: SECRETS.moneyhub.client_id,
+    redirect_uri: "https://your-frontend.com/callback",
+    response_type: "code id_token",
+    scope: "openid id:test",
+    state: "some-random-state",
+    nonce: "random-nonce",
+    claims: {
+      id_token: {
+        sub: {
+          essential: true,
+          value: userId,
+        },
+      },
+    },
+    prompt: "consent",
+  });
+  return data.authorization_url; // Return the generated Authorization URL
+}
+
+---
+
+export async function exchangeAuthCodeForTokens(
+  code: string,
+  moneyhubAxios: AxiosInstance
+): Promise<{ access_token: string; id_token: string }> {
+  const { data } = await moneyhubAxios.post("/oidc/token", {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: "https://your-frontend.com/callback",
+    client_id: SECRETS.moneyhub.client_id,
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: generateClientAssertion(SECRETS.moneyhub.private_key, SECRETS.moneyhub.client_id),
+  });
+  return { access_token: data.access_token, id_token: data.id_token }; // Return tokens
+}
+
+---
+
+export async function generateScopedAccessToken(
+  userId: string,
+  moneyhubAxios: AxiosInstance
+): Promise<string> {
+  const { data } = await moneyhubAxios.post("/oidc/token", {
+    scope: "accounts:read beneficiaries:read",
+    grant_type: "client_credentials",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: generateClientAssertion(SECRETS.moneyhub.private_key, SECRETS.moneyhub.client_id),
+    sub: userId,
+  });
+  return data.access_token; // Return scoped access token
+}
