@@ -157,3 +157,41 @@ export async function generateClientToken(): Promise<string> {
     throw { message: "Failed to generate client token", cause: error };
   }
 }
+
+
+-------
+
+
+import * as jose from 'jose';
+
+export async function generateJwt() {
+  try {
+    // Define required values
+    const clientId = '645fc464-984f-4167-8852-81ede6535bc5'; // Example Client ID
+    const audience = 'https://moneyhub.example.com/oidc/token'; // Replace with actual endpoint
+    const base64Key = `eyJ4NXQiOiJ...`; // Base64-encoded private key string
+
+    // Decode Base64 private key (PEM format)
+    const privateKeyPem = Buffer.from(base64Key, 'base64').toString();
+
+    // Import the decoded PEM key
+    const privateKey = await jose.importPKCS8(privateKeyPem, 'RS256');
+
+    // Generate JWT
+    const assertion = await new jose.SignJWT({})
+      .setProtectedHeader({ alg: 'RS256' })
+      .setIssuedAt()
+      .setIssuer(clientId)
+      .setSubject(clientId)
+      .setAudience(audience)
+      .setExpirationTime('2h') // Token expires in 2 hours
+      .setJti(Math.random().toString(36).substring(2)) // Unique identifier
+      .sign(privateKey);
+
+    console.log(assertion);
+    return assertion;
+  } catch (error) {
+    console.error('Error generating JWT:', error);
+    throw new Error('JWT generation failed');
+  }
+}
