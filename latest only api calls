@@ -1,0 +1,159 @@
+
+/src/services/generateAuthURI.ts
+--------------------------------
+import axios from "axios";
+import { generateJWT } from "./utils/jwtUtil";
+
+export default async function generateAuthURI(userId: string): Promise<string> {
+  try {
+    const clientAssertion = await generateJWT();
+
+    const body = new URLSearchParams({
+      client_id: "<your_client_id>",
+      response_type: "code",
+      redirect_uri: "<your_redirect_uri>",
+      state: Math.random().toString(36),
+      nonce: Math.random().toString(36),
+      scope: "openid id:test",
+      claims: JSON.stringify({
+        id_token: {
+          sub: { essential: true, value: userId },
+          "mh:con_id": { essential: true },
+        },
+      }),
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await axios.post(
+      "https://identity.moneyhub.co.uk/oidc/request",
+      body,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+
+    return response.data.url;
+  } catch (error) {
+    throw { message: "Failed to generate authorization URI", cause: error };
+  }
+}
+
+-------------------------------------------------------------------------------------
+
+/src/services/exchangeAuthCode.ts
+---------------------------------
+import axios from "axios";
+import { generateJWT } from "./utils/jwtUtil";
+
+export default async function exchangeAuthCode(authCode: string): Promise<{ accessToken: string; userId: string }> {
+  try {
+    const clientAssertion = await generateJWT();
+
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: authCode,
+      redirect_uri: "<your_redirect_uri>",
+      client_id: "<your_client_id>",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await axios.post(
+      "https://identity.moneyhub.co.uk/oidc/token",
+      body,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+
+    const { access_token, id_token } = response.data;
+    const payload = JSON.parse(Buffer.from(id_token.split(".")[1], "base64").toString("utf-8"));
+
+    return { accessToken: access_token, userId: payload.sub };
+  } catch (error) {
+    throw { message: "Failed to exchange authorization code", cause: error };
+  }
+}
+
+-------------------------------------------------------------------------------------
+
+/src/services/retrieveScopedToken.ts
+-------------------------------------
+import axios from "axios";
+import { generateJWT } from "./utils/jwtUtil";
+
+export default async function retrieveScopedToken(userId: string): Promise<string> {
+  try {
+    const clientAssertion = await generateJWT();
+
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "accounts:read",
+      sub: userId,
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await axios.post(
+      "https://identity.moneyhub.co.uk/oidc/token",
+      body,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+
+    return response.data.access_token;
+  } catch (error) {
+    throw { message: "Failed to retrieve scoped token", cause: error };
+  }
+}
+
+-------------------------------------------------------------------------------------
+
+/src/services/createUser.ts
+---------------------------
+import axios from "axios";
+
+export default async function createUser(clientToken: string): Promise<string> {
+  try {
+    const response = await axios.post(
+      "https://identity.moneyhub.co.uk/users",
+      {}, // Empty body
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${clientToken}`, // Pass client token as Bearer token
+        },
+      }
+    );
+
+    return response.data.sub; // Return the user ID (sub)
+  } catch (error) {
+    throw { message: "Failed to create Moneyhub user", cause: error };
+  }
+}
+
+-------------------------------------------------------------------------------------
+
+/src/services/generateClientToken.ts
+------------------------------------
+import axios from "axios";
+import { generateJWT } from "./utils/jwtUtil";
+
+export async function generateClientToken(): Promise<string> {
+  try {
+    const clientAssertion = await generateJWT();
+
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "user:create",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await axios.post(
+      "https://identity.moneyhub.co.uk/oidc/token",
+      body,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+
+    return response.data.access_token; // Return the client credentials token
+  } catch (error) {
+    throw { message: "Failed to generate client token", cause: error };
+  }
+}
