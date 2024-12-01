@@ -1,0 +1,31 @@
+import { AxiosInstance } from "axios";
+
+/*
+ * This service creates a new user in Moneyhub using the client credentials token.
+ */
+export default async function createUser(
+  moneyhubAxios: AxiosInstance,
+  clientToken: string
+): Promise<string> {
+  if (!moneyhubAxios) {
+    throw new Error("Moneyhub Axios instance is undefined");
+  }
+
+  try {
+    const response = await moneyhubAxios.post(
+      "/users",
+      {}, // Empty body as required by Moneyhub API
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${clientToken}`, // Pass the client token in the Authorization header
+        },
+      }
+    );
+
+    // Return the created user's unique ID (sub)
+    return response.data.sub;
+  } catch (error) {
+    throw new Error("Failed to create Moneyhub user", { cause: error });
+  }
+}
