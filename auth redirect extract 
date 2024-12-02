@@ -1,0 +1,55 @@
+// src/services/handleRedirect.ts
+import { Context } from "hono";
+import jwtDecode from "jwt-decode"; // Install this via `npm install jwt-decode`
+
+interface DecodedToken {
+  sub: string; // User ID from the ID token
+  [key: string]: any; // Other claims
+}
+
+export default async function handleRedirect(c: Context): Promise<Response> {
+  try {
+    // Extract `code` and `id_token` from the query parameters
+    const code = c.req.query("code");
+    const idToken = c.req.query("id_token");
+
+    if (!code || !idToken) {
+      return c.json(
+        { error: "Missing code or id_token in the redirect URI" },
+        400
+      );
+    }
+
+    // Decode the ID token to extract the `sub` field (user ID)
+    const decodedToken: DecodedToken = jwtDecode(idToken);
+    const sub = decodedToken.sub;
+
+    if (!sub) {
+      return c.json(
+        { error: "Failed to decode ID token or missing sub field" },
+        400
+      );
+    }
+
+    // Return the authorization code and user ID
+    return c.json({ authCode: code, userId: sub });
+  } catch (error) {
+    return c.json(
+      { error: "Failed to process redirect URI", details: error.message },
+      500
+    );
+  }
+}
+
+
+
+// src/routes/redirectRoute.ts
+import { Hono } from "hono";
+import handleRedirect from "../services/handleRedirect";
+
+const redirectRoute = new Hono();
+
+// Handle Moneyhub's redirection with `code` and `id_token`
+redirectRoute.get("/auth-redirect", handleRedirect);
+
+export default redirectRoute;
