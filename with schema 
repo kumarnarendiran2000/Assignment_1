@@ -1,0 +1,240 @@
+
+# API 1: Generate Client Token
+# ----------------------------------------------------------------
+import { AxiosInstance } from "axios";
+import { generateJwt } from "../utils/clientAssertionUtils";
+import { z } from "zod";
+import XRay from "aws-xray-sdk";
+import logger from "../utils/logger";
+
+const tokenResponseSchema = z.object({
+  access_token: z.string(),
+  expires_in: z.number(),
+  scope: z.string(),
+});
+
+export default async function generateBearerTokenForUserCreation(
+  moneyhubAxios: AxiosInstance
+): Promise<string> {
+  if (!moneyhubAxios) {
+    throw new Error("Moneyhub Axios instance is undefined");
+  }
+
+  const subSegment = XRay.getSegment()?.addNewSubsegment("Moneyhub: Generate Bearer Token");
+  try {
+    const clientAssertion = await generateJwt();
+
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "user:create",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await moneyhubAxios.post("/oidc/token", body, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const responseData = tokenResponseSchema.parse(response.data);
+    subSegment?.addAnnotation("TokenGenerated", true);
+    subSegment?.addMetadata("ResponseData", responseData);
+
+    return responseData.access_token;
+  } catch (error) {
+    subSegment?.addError(error);
+    if (error.response?.status === 400) {
+      throw new Error("Bad Request: Invalid token generation parameters");
+    }
+    throw new Error("Failed to generate client token", { cause: error });
+  } finally {
+    subSegment?.close();
+  }
+}
+
+# API 2: Create User
+# ----------------------------------------------------------------
+import { AxiosInstance } from "axios";
+import { z } from "zod";
+import XRay from "aws-xray-sdk";
+
+const userResponseSchema = z.object({
+  sub: z.string(),
+});
+
+export default async function createUser(
+  moneyhubAxios: AxiosInstance,
+  clientToken: string
+): Promise<string> {
+  if (!moneyhubAxios) {
+    throw new Error("Moneyhub Axios instance is undefined");
+  }
+
+  const subSegment = XRay.getSegment()?.addNewSubsegment("Moneyhub: Create User");
+  try {
+    const response = await moneyhubAxios.post(
+      "/users",
+      {},
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${clientToken}`,
+        },
+      }
+    );
+
+    const responseData = userResponseSchema.parse(response.data);
+    subSegment?.addAnnotation("UserCreated", true);
+    subSegment?.addMetadata("UserID", responseData.sub);
+
+    return responseData.sub;
+  } catch (error) {
+    subSegment?.addError(error);
+    if (error.response?.status === 400) {
+      throw new Error("Bad Request: Invalid user creation parameters");
+    }
+    throw new Error("Failed to create Moneyhub user", { cause: error });
+  } finally {
+    subSegment?.close();
+  }
+}
+
+# API 3: Generate Authorization URI
+# ----------------------------------------------------------------
+import axios, { AxiosInstance } from "axios";
+import { generateJwt } from "../utils/clientAssertionUtils";
+import { z } from "zod";
+import XRay from "aws-xray-sdk";
+
+export default async function generateAuthURI(
+  moneyhubAxios: AxiosInstance,
+  userId: string
+): Promise<string> {
+  if (!moneyhubAxios) {
+    throw new Error("Moneyhub Axios instance is undefined");
+  }
+
+  const subSegment = XRay.getSegment()?.addNewSubsegment("Moneyhub: Generate Auth URI");
+  try {
+    const clientAssertion = await generateJwt();
+
+    const body = new URLSearchParams({
+      client_id: "<your-client-id>",
+      response_type: "code",
+      redirect_uri: "<your-redirect-uri>",
+      state: Math.random().toString(36).substring(2),
+      nonce: Math.random().toString(36).substring(2),
+      scope: "openid id:test",
+      claims: JSON.stringify({
+        id_token: {
+          sub: { essential: true, value: userId },
+          "mh:con_id": { essential: true },
+        },
+      }),
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await moneyhubAxios.post("/oidc/request", body, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const responseData = response.data.url;
+    subSegment?.addAnnotation("AuthURI", true);
+    return responseData;
+  } catch (error) {
+    subSegment?.addError(error);
+    throw new Error("Failed to generate authorization URI", { cause: error });
+  } finally {
+    subSegment?.close();
+  }
+}
+
+# API 4: Exchange Authorization Code
+# ----------------------------------------------------------------
+import { AxiosInstance } from "axios";
+import { generateJwt } from "../utils/clientAssertionUtils";
+import XRay from "aws-xray-sdk";
+
+export default async function exchangeAuthCode(
+  moneyhubAxios: AxiosInstance,
+  authCode: string
+): Promise<{ accessToken: string; userId: string }> {
+  if (!moneyhubAxios) {
+    throw new Error("Moneyhub Axios instance is undefined");
+  }
+
+  const subSegment = XRay.getSegment()?.addNewSubsegment("Moneyhub: Exchange Auth Code");
+  try {
+    const clientAssertion = await generateJwt();
+
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: authCode,
+      redirect_uri: "<your-redirect-uri>",
+      client_id: "<your-client-id>",
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await moneyhubAxios.post("/oidc/token", body, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const { access_token, id_token } = response.data;
+    const payload = JSON.parse(
+      Buffer.from(id_token.split(".")[1], "base64").toString("utf-8")
+    );
+    const userId = payload.sub;
+
+    subSegment?.addAnnotation("AccessTokenGenerated", true);
+    subSegment?.addMetadata("UserID", userId);
+
+    return { accessToken: access_token, userId };
+  } catch (error) {
+    subSegment?.addError(error);
+    throw new Error("Failed to exchange authorization code", { cause: error });
+  } finally {
+    subSegment?.close();
+  }
+}
+
+# API 5: Retrieve Scoped Token
+# ----------------------------------------------------------------
+import { AxiosInstance } from "axios";
+import { generateJwt } from "../utils/clientAssertionUtils";
+import XRay from "aws-xray-sdk";
+
+export default async function retrieveScopedToken(
+  moneyhubAxios: AxiosInstance,
+  userId: string
+): Promise<string> {
+  if (!moneyhubAxios) {
+    throw new Error("Moneyhub Axios instance is undefined");
+  }
+
+  const subSegment = XRay.getSegment()?.addNewSubsegment("Moneyhub: Retrieve Scoped Token");
+  try {
+    const clientAssertion = await generateJwt();
+
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "accounts:read",
+      sub: userId,
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+    });
+
+    const response = await moneyhubAxios.post("/oidc/token", body, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const scopedToken = response.data.access_token;
+    subSegment?.addAnnotation("ScopedTokenGenerated", true);
+    return scopedToken;
+  } catch (error) {
+    subSegment?.addError(error);
+    throw new Error("Failed to retrieve scoped token", { cause: error });
+  } finally {
+    subSegment?.close();
+  }
+}
