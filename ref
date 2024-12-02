@@ -185,3 +185,19 @@ export const generateClientAssertion = async (): Promise<string> => {
     .setProtectedHeader({ alg: "RS256" })
     .sign(await (await import("jose")).importPKCS8(privateKey, "RS256"));
 };
+
+
+
+test("API call should fail if the base URL is incorrect", async () => {
+    CONFIG.updateApiConfig({
+      ...mockApiAppConfig,
+      moneyHub: { identityBaseUrl: "https://incorrect.moneyhub.co.uk" },
+    });
+
+    const res = await mockApp.request("/hello", { method: "GET" });
+
+    // The request won't match the mock if the baseURL is incorrect
+    expect(res.status).not.toEqual(200);
+  });
+});
+
