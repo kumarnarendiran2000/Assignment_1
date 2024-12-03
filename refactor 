@@ -1,0 +1,164 @@
+export enum moneyHubAction {
+  CLIENT_BEARER_TOKEN = 'CLIENT_BEARER_TOKEN',
+  SCOPED_TOKEN = 'SCOPED_TOKEN',
+  AUTHORIZATION_URI = 'AUTHORIZATION_URI',
+  EXCHANGE_AUTH_CODE = 'EXCHANGE_AUTH_CODE',
+}
+
+import { moneyHubAction } from '../enums/moneyHubAction';
+import { generateJwt } from '../utils/moneyhub/clientAssertionUtils';
+
+export async function getMoneyHubFormParams(
+  actionEnum: moneyHubAction,
+  additionalParams: Record<string, string> = {}
+): Promise<URLSearchParams> {
+  const clientAssertion = await generateJwt();
+  const clientAssertionType = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+
+  let params: Record<string, string> = {
+    client_assertion_type: clientAssertionType,
+    client_assertion: clientAssertion,
+  };
+
+  if (actionEnum === moneyHubAction.CLIENT_BEARER_TOKEN || actionEnum === moneyHubAction.SCOPED_TOKEN) {
+    params = {
+      ...params,
+      grant_type: 'client_credentials',
+    };
+
+    if (additionalParams.scope) {
+      params = {
+        ...params,
+        scope: additionalParams.scope,
+      };
+
+      if (actionEnum === moneyHubAction.SCOPED_TOKEN && additionalParams.sub) {
+        params = {
+          ...params,
+          sub: additionalParams.sub, // Add sub for Scoped Token
+        };
+      }
+    }
+  } else if (actionEnum === moneyHubAction.AUTHORIZATION_URI) {
+    params = {
+      ...params,
+      scope: additionalParams.scope || 'openid id:test accounts:read',
+      response_type: 'code id_token',
+      state: additionalParams.state || Math.random().toString(36),
+      nonce: additionalParams.nonce || Math.random().toString(36),
+      client_id: additionalParams.client_id || 'your-client-id',
+      redirect_uri: additionalParams.redirect_uri || 'https://www.google.com',
+    };
+  } else if (actionEnum === moneyHubAction.EXCHANGE_AUTH_CODE) {
+    if (!additionalParams.authCode) throw new Error('authCode is required for EXCHANGE_AUTH_CODE action');
+    params = {
+      ...params,
+      grant_type: 'authorization_code',
+      code: additionalParams.authCode,
+      redirect_uri: additionalParams.redirect_uri || 'https://www.google.com',
+      client_id: additionalParams.client_id || 'your-client-id',
+    };
+  } else {
+    throw new Error(`Unsupported actionEnum: ${actionEnum}`);
+  }
+
+  return new URLSearchParams(params);
+}
+
+
+
+-----
+
+import { AxiosInstance } from 'axios';
+import { getMoneyHubFormParams } from './getMoneyHubFormParams';
+import { moneyHubAction } from '../enums/moneyHubAction';
+
+export async function generateBearerTokenForUserCreation(
+  moneyhubAxios: AxiosInstance,
+  scope: string = 'user:create'
+): Promise<string> {
+  try {
+    const body = await getMoneyHubFormParams(moneyHubAction.CLIENT_BEARER_TOKEN, { scope });
+    const response = await moneyhubAxios.post('/oidc/token', body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+
+    return response.data.access_token;
+  } catch (error) {
+    throw new Error('Failed to generate client token', { cause: error });
+  }
+}
+
+----
+
+import { AxiosInstance } from 'axios';
+import { getMoneyHubFormParams } from './getMoneyHubFormParams';
+import { moneyHubAction } from '../enums/moneyHubAction';
+
+export async function generateAuthURI(
+  moneyhubAxios: AxiosInstance,
+  scope: string = 'openid id:test accounts:read'
+): Promise<string> {
+  try {
+    const body = await getMoneyHubFormParams(moneyHubAction.AUTHORIZATION_URI, { scope });
+    const response = await moneyhubAxios.post('/oidc/request', body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+
+    return response.data.request_uri;
+  } catch (error) {
+    throw new Error('Failed to generate authorization URI', { cause: error });
+  }
+}
+
+----
+
+
+
+
+import { AxiosInstance } from 'axios';
+import { getMoneyHubFormParams } from './getMoneyHubFormParams';
+import { moneyHubAction } from '../enums/moneyHubAction';
+
+export async function exchangeAuthCode(
+  moneyhubAxios: AxiosInstance,
+  authCode: string,
+  redirectUri: string = 'https://www.google.com'
+): Promise<string> {
+  try {
+    const body = await getMoneyHubFormParams(moneyHubAction.EXCHANGE_AUTH_CODE, {
+      authCode,
+      redirect_uri: redirectUri,
+    });
+    const response = await moneyhubAxios.post('/oidc/token', body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+
+    return response.data.id_token;
+  } catch (error) {
+    throw new Error('Failed to exchange authorization code', { cause: error });
+  }
+}
+
+----
+
+import { AxiosInstance } from 'axios';
+import { getMoneyHubFormParams } from './getMoneyHubFormParams';
+import { moneyHubAction } from '../enums/moneyHubAction';
+
+export async function retrieveScopedToken(
+  moneyhubAxios: AxiosInstance,
+  userId: string,
+  scope: string = 'accounts:read'
+): Promise<string> {
+  try {
+    const body = await getMoneyHubFormParams(moneyHubAction.SCOPED_TOKEN, { sub: userId, scope });
+    const response = await moneyhubAxios.post('/oidc/token', body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+
+    return response.data.access_token;
+  } catch (error) {
+    throw new Error('Failed to retrieve scoped token', { cause: error });
+  }
+}
