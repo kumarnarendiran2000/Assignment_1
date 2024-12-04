@@ -118,3 +118,69 @@ describe("Bearer Token Generation", () => {
     );
   });
 });
+
+----
+
+import axios from "axios";
+import MockAdapter from "axios-mock-adapter";
+import { describe, test, expect, vi } from "vitest";
+import { createUser } from "./createUser";
+import { generateBearerTokenForUserCreation } from "./bearerTokenGeneration";
+
+vi.mock("./bearerTokenGeneration"); // Mock the bearer token generation service
+
+describe("Create User Service", () => {
+  let mockMoneyHubAxios: ReturnType<typeof axios.create>;
+  let mockAdapter: MockAdapter;
+
+  beforeEach(() => {
+    // Create a mock Axios instance
+    mockMoneyHubAxios = axios.create({
+      baseURL: "https://mock-moneyhub-api.com",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    mockAdapter = new MockAdapter(mockMoneyHubAxios);
+  });
+
+  afterEach(() => {
+    // Reset the mock adapter after each test
+    mockAdapter.reset();
+  });
+
+  test("should create a user successfully", async () => {
+    const mockBearerToken = "mocked-access-token";
+    const mockResponse = { data: { userId: "mocked-user-id" } };
+
+    // Mock the generateBearerTokenForUserCreation function
+    vi.mocked(generateBearerTokenForUserCreation).mockResolvedValueOnce(mockBearerToken);
+
+    // Mock the Axios POST response
+    mockAdapter.onPost("/users").reply(200, mockResponse);
+
+    // Call the function
+    const userId = await createUser(mockMoneyHubAxios);
+
+    // Expectations
+    expect(generateBearerTokenForUserCreation).toHaveBeenCalledWith(mockMoneyHubAxios, "user:create"); // Verify the token generation call
+    expect(mockAdapter.history.post.length).toBe(1); // Ensure one POST request was made
+    expect(mockAdapter.history.post[0].url).toBe("/users"); // Correct endpoint
+    expect(mockAdapter.history.post[0].headers.Authorization).toBe(`Bearer ${mockBearerToken}`); // Correct Authorization header
+    expect(userId).toBe("mocked-user-id"); // Verify returned userId
+  });
+
+  test("should throw an error if user creation fails", async () => {
+    const mockBearerToken = "mocked-access-token";
+
+    // Mock the generateBearerTokenForUserCreation function
+    vi.mocked(generateBearerTokenForUserCreation).mockResolvedValueOnce(mockBearerToken);
+
+    // Mock the Axios POST response with an error
+    mockAdapter.onPost("/users").reply(500);
+
+    await expect(createUser(mockMoneyHubAxios)).rejects.toThrow(
+      "Failed to create Moneyhub user"
+    );
+  });
+});
