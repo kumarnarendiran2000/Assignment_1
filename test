@@ -48,3 +48,73 @@ describe("Bearer Token Generation", () => {
     );
   });
 });
+
+
+------
+
+
+import axios from "axios";
+import MockAdapter from "axios-mock-adapter";
+import { describe, test, expect, vi } from "vitest";
+import { generateBearerTokenForUserCreation } from "./bearerTokenGeneration";
+import { getMHFormParams } from "./getMHFormParams";
+
+vi.mock("./getMHFormParams"); // Mock the common body generation function
+
+describe("Bearer Token Generation", () => {
+  let mockMoneyHubAxios: ReturnType<typeof axios.create>;
+  let mockAdapter: MockAdapter;
+
+  beforeEach(() => {
+    // Create Axios instance and attach MockAdapter
+    mockMoneyHubAxios = axios.create({
+      baseURL: "https://mock-moneyhub-api.com", // Mock base URL
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+    });
+    mockAdapter = new MockAdapter(mockMoneyHubAxios);
+  });
+
+  afterEach(() => {
+    mockAdapter.reset(); // Reset mock adapter after each test
+  });
+
+  test("should generate a bearer token successfully", async () => {
+    const mockResponse = { access_token: "mocked-access-token" };
+
+    // Mocking getMHFormParams to return expected form params
+    vi.mocked(getMHFormParams).mockResolvedValueOnce(
+      new URLSearchParams({
+        scope: "user:create",
+        grant_type: "client_credentials",
+        client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        client_assertion: "mocked-client-assertion",
+      })
+    );
+
+    // Mocking Axios POST response
+    mockAdapter.onPost("/oidc/token").reply(200, mockResponse);
+
+    // Call the function
+    const token = await generateBearerTokenForUserCreation(mockMoneyHubAxios, "user:create");
+
+    // Expectations
+    expect(getMHFormParams).toHaveBeenCalledWith({
+      scope: "user:create",
+      grant_type: "client_credentials",
+    }); // Ensure correct params passed
+    expect(mockAdapter.history.post.length).toBe(1); // Ensure one POST request was made
+    expect(mockAdapter.history.post[0].url).toBe("/oidc/token"); // Correct endpoint
+    expect(token).toBe("mocked-access-token"); // Verify returned token
+  });
+
+  test("should throw an error if token generation fails", async () => {
+    // Mocking Axios POST response with an error
+    mockAdapter.onPost("/oidc/token").reply(500);
+
+    await expect(generateBearerTokenForUserCreation(mockMoneyHubAxios, "user:create")).rejects.toThrow(
+      "Failed to generate client token"
+    );
+  });
+});
