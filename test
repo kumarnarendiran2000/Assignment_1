@@ -1,0 +1,50 @@
+import { describe, test, expect, vi } from "vitest";
+import { generateBearerTokenForUserCreation } from "./bearerTokenGeneration";
+import { getMHFormParams } from "./getMHFormParams";
+import { mockMoneyHubAxiosInstance } from "./testUtils/mocks";
+
+vi.mock("./getMHFormParams"); // Mock the common body generation
+const mockMoneyHubAxios = mockMoneyHubAxiosInstance();
+
+describe("Bearer Token Generation", () => {
+  test("should generate a bearer token successfully", async () => {
+    const mockResponse = { data: { access_token: "mocked-access-token" } };
+
+    // Mocking getMHFormParams to return expected form params
+    vi.mocked(getMHFormParams).mockResolvedValueOnce(
+      new URLSearchParams({
+        scope: "user:create",
+        grant_type: "client_credentials",
+        client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        client_assertion: "mocked-client-assertion",
+      })
+    );
+
+    // Mocking Axios POST response
+    mockMoneyHubAxios.post.mockResolvedValueOnce(mockResponse);
+
+    // Call the function
+    const token = await generateBearerTokenForUserCreation(mockMoneyHubAxios, "user:create");
+
+    // Expectations
+    expect(getMHFormParams).toHaveBeenCalledWith({
+      scope: "user:create",
+      grant_type: "client_credentials",
+    }); // Ensure correct params passed
+    expect(mockMoneyHubAxios.post).toHaveBeenCalledWith(
+      "/oidc/token",
+      expect.any(URLSearchParams),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+    expect(token).toBe("mocked-access-token"); // Verify returned token
+  });
+
+  test("should throw an error if token generation fails", async () => {
+    // Mocking Axios POST response with an error
+    mockMoneyHubAxios.post.mockRejectedValueOnce(new Error("Request failed"));
+
+    await expect(generateBearerTokenForUserCreation(mockMoneyHubAxios, "user:create")).rejects.toThrow(
+      "Failed to generate client token"
+    );
+  });
+});
