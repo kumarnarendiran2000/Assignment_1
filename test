@@ -184,3 +184,29 @@ describe("Create User Service", () => {
     );
   });
 });
+
+--- 
+update to bearer token - fail case
+
+test("should throw an error when invalid body parameters are passed", async () => {
+    // Mock getMHFormParams to return incomplete or invalid parameters
+    vi.mocked(getMHFormParams).mockResolvedValueOnce(
+      new URLSearchParams({
+        // Missing 'grant_type' intentionally to simulate a bad request
+        scope: "user:create",
+        client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        client_assertion: "mocked-client-assertion",
+      })
+    );
+
+    mockAdapter.onPost("/oidc/token").reply(400, { error: "invalid_request" });
+
+    await expect(generateBearerTokenForUserCreation(mockMoneyHubAxios, "user:create")).rejects.toThrow(
+      "Failed to generate client token"
+    );
+
+    // Ensure the POST request was made despite the invalid params
+    expect(mockAdapter.history.post.length).toBe(1);
+    expect(mockAdapter.history.post[0].data).not.toContain("grant_type");
+  });
+});
